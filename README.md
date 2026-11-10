@@ -7,6 +7,16 @@ controlled, repeatable actuation of the fingers for biomechanics research.
 
 Developed in the Towles biomechanics lab.
 
+## Start the two-motor rig (Windows, LabVIEW 2023 Q1 x64)
+
+GitHub downloads contain the source and VIs. On a Windows machine with a full python.org CPython **3.10.11 x64** installation (including pip and the Python launcher), extract the repository and run this once in CMD from the folder containing this README:
+
+```bat
+py -3.10 build_runtime.py
+```
+
+The build downloads the pinned packages and checks the resulting runtime. Open `labview/multi_final.vi` in 64-bit LabVIEW 2023 Q1. With both modes set to **Telemetry**, click **Run**. The target PC also needs the Phidget22 Windows driver. Once built, the entire folder, including `runtime`, can be moved or renamed. See [Rig setup and tview](RIG_SETUP.md) for adapter identities, the offline build option, and stop instructions.
+
 ## Overview
 
 Each finger tendon is routed over a load cell and wound onto a motor-driven
@@ -77,15 +87,11 @@ python motor_testing/Tests/trq_test.py   # also: pos_test.py, vel_test.py
 Each test drives a known command profile, logs telemetry and load cell output,
 and saves a timestamped plot and CSV in the working directory.
 
-**Operate the rig from LabVIEW:** open the VIs in `labview/`. They import the
-Python control libraries (configure the Python environment path via
-`py_venv_init.vi` / `add_to_path.vi`) and expose move, torque, and telemetry
-controls for single- and multi-motor setups.
+**Operate the two-motor rig from LabVIEW:** open `labview/multi_final.vi` after the one-time build above. The VI locates its Python runtime and modules relative to its own folder.
 
 ## Notes
 
-- Motor IDs default to 1 (and increment for multi-motor rigs); change them in the
-  relevant `start` / `start_multi` call to match your CAN bus.
+- Each motor has its own USB adapter. The production rig checks the ID, COM port and USB serial mappings in `labview/rig_motor_runtime.py`.
 - Load cell calibration constants in `phidget_funcs.py` are specific to the cells
   and wiring used here and should be re-derived for a different setup using
   `load_cell_calibration.py`.

@@ -11,6 +11,7 @@ VIs via LabVIEW Python nodes.
 |---|---|
 | `labview_moteus_funcs.py` | Single-motor control (move / hold / torque / velocity+torque). |
 | `moteus_multi.py` | Multi-motor control with per-motor modes. |
+| `rig_motor_runtime.py` | Maps each motor to its USB adapter and keeps a single event loop for the session. |
 | `setup_funcs.py` | Controller setup: re-zero, soft position limits. |
 | `phidget_funcs.py` | Dual load cell reading, calibrated to Newtons. |
 
@@ -21,8 +22,10 @@ VIs via LabVIEW Python nodes.
 | `sinlge_motor.vi` | Single-motor operator front panel. |
 | `multi_final.vi` | Multi-motor operator front panel. |
 | `move_multi.vi`, `multi_pos.vi`, `setup_mulit.vi` | Multi-motor move / position / setup sub-VIs. |
-| `py_venv_init.vi`, `add_to_path.vi` | Initialize the Python virtual environment and import path. |
+| `py_venv_init.vi`, `add_to_path.vi` | Open the folder-local Python 3.10 session and resolve file paths relative to the VIs. |
 | `Read Ini File 2012 NIVerified.vi` | Stock NI utility for reading INI config (dependency). |
+
+The two-motor rig setup, including the build command and `tview` examples, is in [RIG_SETUP.md](../RIG_SETUP.md).
 
 ## Notes
 

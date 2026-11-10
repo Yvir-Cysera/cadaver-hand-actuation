@@ -1,65 +1,114 @@
-from Phidget22.Phidget import *
-from Phidget22.Devices.VoltageRatioInput import *
+"""LabVIEW entry points for the two calibrated Phidget load-cell channels."""
+
+from contextlib import ExitStack
+from math import isfinite
+from threading import Lock
+from time import monotonic, sleep
+
+from Phidget22.Devices.VoltageRatioInput import VoltageRatioInput
+from Phidget22.ErrorCode import ErrorCode
+from Phidget22.PhidgetException import PhidgetException
+
+
+_REQUESTED_INTERVAL_MS = 32
+_ATTACH_TIMEOUT_MS = 5000
+_FIRST_SAMPLE_TIMEOUT_S = 5.0
+_lock = Lock()
+_session = None
+
+
+def _close_session():
+    """Called under the lock. Forget the session even if an SDK close fails."""
+    global _session
+    previous, _session = _session, None
+    if previous is not None:
+        cleanup, _ = previous
+        cleanup.close()
+
+
+def _ratio(number, channel):
+    value = channel.getVoltageRatio()
+    if not isfinite(value):
+        raise ValueError(f"Phidget channel {number} returned a non-finite voltage ratio")
+    return value
+
+
+def _wait_for_first_samples(channels):
+    """A newly attached bridge can report UNKNOWNVAL during initial calibration."""
+    pending = dict(enumerate(channels, start=1))
+    deadline = monotonic() + _FIRST_SAMPLE_TIMEOUT_S
+    while pending:
+        for number, channel in list(pending.items()):
+            try:
+                _ratio(number, channel)
+            except PhidgetException as exc:
+                if exc.code != ErrorCode.EPHIDGET_UNKNOWNVAL:
+                    raise
+            else:
+                del pending[number]
+        if pending:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                missing = ", ".join(str(n) for n in pending)
+                raise TimeoutError(
+                    f"No valid Phidget voltage ratio after {_FIRST_SAMPLE_TIMEOUT_S:g} s "
+                    f"on channel(s) {missing} (EPHIDGET_UNKNOWNVAL)"
+                )
+            sleep(min(0.05, remaining))
+
 
 def phidget_start():
-    """
-    Initialize two Phidget load cell channels for simultaneous reading.
-    Creates global VoltageRatioInput objects for each load cell.
-    Sets channel numbers, opens connections, and sets data rates.
-    """
-    global in1
-    global in2
-    in1 = VoltageRatioInput()  # Load cell 1 input object
-    in2 = VoltageRatioInput()  # Load cell 2 input object
+    """Open channels 1 and 2. On failure, leave no session available for reads."""
+    global _session
+    with _lock:
+        _close_session()
+        with ExitStack() as cleanup:
+            channels = []
+            for number in (1, 2):
+                channel = VoltageRatioInput()
+                cleanup.callback(channel.close)
+                channel.setChannel(number)
+                try:
+                    channel.openWaitForAttachment(_ATTACH_TIMEOUT_MS)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Could not attach Phidget load-cell channel {number}: {exc}"
+                    ) from exc
+                channels.append(channel)
 
-    in1.setChannel(1)          # Assign channel 1 to in1
-    in2.setChannel(2)          # Assign channel 2 to in2
+            interval_ms = max(_REQUESTED_INTERVAL_MS,
+                              *(ch.getMinDataInterval() for ch in channels))
+            maximum_ms = min(ch.getMaxDataInterval() for ch in channels)
+            if interval_ms > maximum_ms:
+                raise RuntimeError(
+                    f"No common load-cell interval at or above {interval_ms} ms "
+                    f"(maximum supported by both: {maximum_ms} ms)"
+                )
+            for ch in channels:
+                ch.setDataInterval(interval_ms)
 
-    in1.openWaitForAttachment(5000)  # Wait up to 5 seconds for in1 to attach
-    in2.openWaitForAttachment(5000)  # Wait up to 5 seconds for in2 to attach
+            _wait_for_first_samples(channels)
+            _session = (cleanup.pop_all(), channels)
 
-    in1.setDataRate(1000)      # Set data rate for in1 (ms between samples)
-    in2.setDataRate(1000)      # Set data rate for in2
 
 def phidget_data():
-    """
-    Read voltage ratio from both load cells, convert to force (Newtons), and return.
-    Uses calibration offsets and gains for each load cell.
-    Returns:
-        [force1, force2] (list of floats, force in Newtons for each load cell)
-    """
-    in1_value = in1.getVoltageRatio()  # Read voltage ratio from load cell 1
-    in2_value = in2.getVoltageRatio()  # Read voltage ratio from load cell 2
+    """Return [force1, force2] in newtons, or raise if a sample is unavailable."""
+    with _lock:
+        if _session is None:
+            raise RuntimeError("Load cells are not initialized; call phidget_start() first")
+        _, (in1, in2) = _session
+        in1_value = _ratio(1, in1)
+        in2_value = _ratio(2, in2)
 
-    # Calibration offsets for each load cell
-    offset1 = -0.00015446
-    offset2 = -0.00017916
-
-    # Calibration gains for each load cell
-    gain1 = -17173000
-    gain2 = 16379000
-
-    def vlt_to_N(vlt, offset, gain):
-        """
-        Convert voltage ratio to force in Newtons using calibration.
-        Args:
-            vlt (float): Voltage ratio reading.
-            offset (float): Calibration offset.
-            gain (float): Calibration gain.
-        Returns:
-            Force in Newtons (float)
-        """
-        g_to_N = 0.009806650028639  # Conversion factor from grams to Newtons
-        return gain * (vlt + offset) * g_to_N
-
-    force1 = vlt_to_N(in1_value, offset1, gain1)  # Convert load cell 1 reading
-    force2 = vlt_to_N(in2_value, offset2, gain2)  # Convert load cell 2 reading
-
+    offset1, offset2 = -0.00015446, -0.00017916
+    gain1, gain2 = -17173000, 16379000
+    g_to_N = 0.009806650028639
+    force1 = gain1 * (in1_value + offset1) * g_to_N
+    force2 = gain2 * (in2_value + offset2) * g_to_N
     return [force1, force2]
 
+
 def phidget_stop():
-    """
-    Close connections to both Phidget load cell channels.
-    """
-    in1.close()
-    in2.close()
+    """Close both channels. Safe before start, after failed start, and on repeat."""
+    with _lock:
+        _close_session()
